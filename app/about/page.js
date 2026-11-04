@@ -44,7 +44,7 @@ export default function AboutPage() {
             The soul of Palasa, sent with pride to all of India.
           </h1>
           <p className="about-hero-lead">
-            The Original was created by <strong>CH Dhana Vardhan</strong> with a single, heartfelt ambition:
+            The Original was created by <strong>Chennuru DhanaVardhana</strong> with a single, heartfelt ambition:
             to take home grown Palasa origin cashews and deliver them nationwide in premium packaging that honors the land, the farmers, and the authentic taste of Andhra Pradesh.
           </p>
         </div>
@@ -77,11 +77,11 @@ export default function AboutPage() {
               <div className="about-founder-card">
                 <img
                   src="/assets/founder.jpg"
-                  alt="CH Dhana Vardhan, Founder of The Original"
+                  alt="Chennuru DhanaVardhana, Founder of The Original"
                   className="about-founder-img"
                 />
                 <div className="about-founder-label">
-                  <span className="about-founder-name">CH Dhana Vardhan</span>
+                  <span className="about-founder-name">Chennuru DhanaVardhana</span>
                   <span className="about-founder-role">Founder · Palasa Native · Working Professional</span>
                 </div>
               </div>
@@ -107,7 +107,7 @@ export default function AboutPage() {
                   I decided to build <strong>The Original</strong> to change that. I wanted to take the authentic cashews grown right here from our Palasa roots and send them to every household, corporate desk, and festive table across India, packaged in a sleek, premium, modern design so that our town&apos;s heritage is recognized with genuine pride.
                 </p>
                 <div className="about-founder-signature">
-                  <div className="signature-name">CH Dhana Vardhan</div>
+                  <div className="signature-name">Chennuru DhanaVardhana</div>
                   <div className="signature-title">Founder, The Original</div>
                 </div>
               </div>
