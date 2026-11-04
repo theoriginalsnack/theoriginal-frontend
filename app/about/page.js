@@ -3,9 +3,9 @@ import Footer from '../../components/Footer';
 import LazyDroneVideo from '../../components/LazyDroneVideo';
 
 export const metadata = {
-  title: 'About Us | The Original | Founder CH Dhana Vardhan & Palasa Roots',
+  title: 'About Us | The Original | Founder Chennuru DhanaVardhana & Palasa Roots',
   description:
-    'Learn about The Original, founded by CH Dhana Vardhan in Palasa. Selective multi factory curation, strictly factory fresh stock, and premium packaging carrying Palasa cashews with pride across India.',
+    'Learn about The Original, founded by Chennuru Dhanavardhana in Palasa. Selective multi factory curation, strictly factory fresh stock, and premium packaging carrying Palasa cashews with pride across India.',
 };
 
 export default function AboutPage() {
