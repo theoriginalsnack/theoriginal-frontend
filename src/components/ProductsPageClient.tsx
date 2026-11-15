@@ -1,0 +1,1258 @@
+import { useState, useMemo } from 'react';
+import { Link } from 'react-router';
+import Nav from './Nav';
+import Footer from './Footer';
+import { useShop } from '../context/ShopContext';
+import { PRODUCTS_MASTER, getProductById, type Product } from '../data/productsData';
+
+interface ComboBuilderItem {
+  id: string;
+  name: string;
+  tag: string;
+  image: string;
+  weightOptions: { size: string; price: number }[];
+}
+
+// Listing shows everything except gift boxes (they live on /gifting).
+const LISTING_PRODUCTS = PRODUCTS_MASTER.filter((p) => p.category !== 'gifting');
+
+// Top-Level Navigation Tabs with clear label for Combos
+const TOP_CATEGORIES = [
+  { id: 'all', label: 'All', shortLabel: 'All' },
+  { id: 'cashews', label: 'Cashews', shortLabel: 'Cashews' },
+  { id: 'combos', label: 'Combos (Build Your Own)', shortLabel: 'Combos', hint: 'Build your own' },
+  { id: 'flavours-mixes', label: 'Flavours & Mixes', shortLabel: 'Flavours & Mixes' },
+];
+
+// Secondary Grade Filter for Cashews
+const CASHEW_GRADES = [
+  { id: 'all', label: 'All Grades' },
+  { id: 'w320', label: 'W320' },
+  { id: 'w240', label: 'W240' },
+  { id: 'w180', label: 'W180' },
+  { id: 'skin', label: 'Skin Cashew (Pottu Pappu)' },
+  { id: 'splits', label: 'Splits' },
+];
+
+// Items available in Build Your Own Combo. Images and prices come from the master catalog.
+const COMBO_PICKS = [
+  { productId: 'w180', name: 'W180 Jumbo King', tag: 'Jumbo King' },
+  { productId: 'w240', name: 'W240 Selected Jumbo', tag: 'Jumbo' },
+  { productId: 'w320', name: 'W320 Classic Benchmark', tag: 'Classic' },
+  { productId: 'pottu-pappu', name: 'Palasa Skin Cashew (Pottu Pappu)', tag: 'Heritage' },
+  { productId: 'splits', name: 'The Original Splits', tag: 'Kitchen' },
+  { productId: 'choco-cashew', name: 'Chocolate Cashew', tag: 'Artisanal' },
+  { productId: 'choco-badam', name: 'Chocolate Badam', tag: 'Artisanal' },
+  { productId: 'mix-dry-fruit', name: 'Dry Fruits Mix (5-in-1)', tag: 'Superfood' },
+];
+
+const COMBO_BUILDER_ITEMS: ComboBuilderItem[] = COMBO_PICKS.flatMap(({ productId, name, tag }) => {
+  const product = getProductById(productId);
+  if (!product) return [];
+  return [{
+    id: `cb-${productId}`,
+    name,
+    tag,
+    image: product.image,
+    weightOptions: product.options.map(({ size, price }) => ({ size, price })),
+  }];
+});
+
+export default function ProductsPageClient() {
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [selectedGrade, setSelectedGrade] = useState('all');
+  const [selectedSizeFilter, setSelectedSizeFilter] = useState('');
+  const [selectedPriceFilter, setSelectedPriceFilter] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState('featured');
+  const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
+
+  // Selected size per product: { [productId]: optionIndex }
+  const [selectedSizes, setSelectedSizes] = useState<Record<string, number>>({});
+  // Selected custom grade for customizable products: { [productId]: 'W320' | 'W210' | 'W180' }
+  const [selectedCustomGrades, setSelectedCustomGrades] = useState<Record<string, string>>({
+    'choco-cashew': 'W320',
+    'mix-dry-fruit': 'W320',
+  });
+
+  // Cart & Drawer from global context (ensures synchronized count and price)
+  const { cartCount, cartTotal, addToCart: ctxAddToCart, openCartDrawer, guardOrder } = useShop();
+  const [toastMessage, setToastMessage] = useState('');
+
+  // Quick Order Modal (Buy Now)
+  const [orderModalOpen, setOrderModalOpen] = useState(false);
+  const [directOrderItem, setDirectOrderItem] = useState<
+    (Product & { chosenSize: string; chosenPrice: number; quantity: number }) | null
+  >(null);
+  const [orderForm, setOrderForm] = useState({ name: '', phone: '', address: '', pincode: '' });
+
+  // Custom Combo Builder State:
+  // selectedComboState: { [itemId]: { checked: boolean, weightIndex: number } }
+  const [comboBuilderOpen, setComboBuilderOpen] = useState(false);
+  const [selectedComboState, setSelectedComboState] = useState<
+    Record<string, { checked: boolean; weightIndex: number }>
+  >({});
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(''), 3200);
+  };
+
+  const handleSizeChange = (productId: string, optIndex: number) => {
+    setSelectedSizes((prev) => ({ ...prev, [productId]: optIndex }));
+  };
+
+  const handleCustomGradeChange = (productId: string, gradeKey: string) => {
+    setSelectedCustomGrades((prev) => ({ ...prev, [productId]: gradeKey }));
+    // reset size index when switching grade, unless size filter applies
+    setSelectedSizes((prev) => {
+      const updated = { ...prev, [productId]: 0 };
+      if (selectedSizeFilter) {
+        const prod = LISTING_PRODUCTS.find((p) => p.id === productId);
+        if (prod && prod.gradeOptions && prod.gradeOptions[gradeKey]) {
+          const matchIdx = prod.gradeOptions[gradeKey].findIndex((o) =>
+            o.size.toLowerCase().includes(selectedSizeFilter.toLowerCase())
+          );
+          if (matchIdx !== -1) updated[productId] = matchIdx;
+        }
+      }
+      return updated;
+    });
+  };
+
+  // When clicking packaging size filter, set filter AND default matching products to that weight!
+  const handleSizeFilterClick = (sizeId: string) => {
+    const newFilter = selectedSizeFilter === sizeId ? '' : sizeId;
+    setSelectedSizeFilter(newFilter);
+
+    if (newFilter) {
+      // Automatically default matching products to that packaging size!
+      setSelectedSizes((prev) => {
+        const updated = { ...prev };
+        LISTING_PRODUCTS.forEach((product) => {
+          const activeGrade = selectedCustomGrades[product.id] || product.customGrades?.[0];
+          const opts = product.hasGradeCustomization && activeGrade
+            ? product.gradeOptions?.[activeGrade] || product.options
+            : product.options;
+
+          const matchIdx = opts.findIndex((opt) =>
+            opt.size.toLowerCase().includes(newFilter.toLowerCase())
+          );
+          if (matchIdx !== -1) {
+            updated[product.id] = matchIdx;
+          }
+        });
+        return updated;
+      });
+    }
+  };
+
+  const getProductOption = (product: Product) => {
+    const activeGrade = product.hasGradeCustomization
+      ? selectedCustomGrades[product.id] || product.customGrades?.[0] || null
+      : null;
+    const currentOptions = activeGrade
+      ? product.gradeOptions?.[activeGrade] || product.options
+      : product.options;
+
+    let idx = selectedSizes[product.id];
+    // If active size filter exists and this card has a matching option, use that option
+    if (selectedSizeFilter) {
+      const matchIdx = currentOptions.findIndex((opt) =>
+        opt.size.toLowerCase().includes(selectedSizeFilter.toLowerCase())
+      );
+      if (matchIdx !== -1) {
+        idx = matchIdx;
+      }
+    }
+
+    const safeIdx = idx !== undefined && idx < currentOptions.length ? idx : 0;
+    const opt = currentOptions[safeIdx] || currentOptions[0];
+
+    return {
+      ...opt,
+      selectedGrade: activeGrade,
+    };
+  };
+
+  // Add standard product to cart (dispatches directly to global ShopContext)
+  const addToCart = (product: Product) => {
+    const opt = getProductOption(product);
+    const displayName = opt.selectedGrade
+      ? `${product.name} (${opt.selectedGrade})`
+      : product.name;
+    const cartItemId = `${product.id}-${opt.size}-${opt.selectedGrade || 'default'}`;
+
+    const added = ctxAddToCart({
+      id: cartItemId,
+      productId: product.id,
+      name: displayName,
+      size: opt.size,
+      price: opt.price,
+      mrp: opt.mrp,
+      image: product.image,
+      quantity: 1,
+    });
+    if (!added) return;
+    showToast(`Added ${displayName} (${opt.size}) to bag`);
+  };
+
+  // Buy Now direct flow
+  const handleBuyNow = (product: Product) => {
+    if (!guardOrder()) return;
+    const opt = getProductOption(product);
+    const displayName = opt.selectedGrade
+      ? `${product.name} (${opt.selectedGrade})`
+      : product.name;
+
+    setDirectOrderItem({
+      ...product,
+      name: displayName,
+      chosenSize: opt.size,
+      chosenPrice: opt.price,
+      quantity: 1,
+    });
+    setOrderModalOpen(true);
+  };
+
+  // Combo Builder Handlers with Real-Time Weight Switcher
+  const toggleComboItem = (id: string) => {
+    setSelectedComboState((prev) => {
+      const current = prev[id];
+      if (current && current.checked) {
+        return { ...prev, [id]: { ...current, checked: false } };
+      }
+      return {
+        ...prev,
+        [id]: { checked: true, weightIndex: current?.weightIndex ?? 0 },
+      };
+    });
+  };
+
+  const setComboItemWeight = (id: string, weightIndex: number) => {
+    setSelectedComboState((prev) => ({
+      ...prev,
+      [id]: { checked: true, weightIndex },
+    }));
+  };
+
+  const checkedComboEntries = useMemo(() => {
+    return COMBO_BUILDER_ITEMS.flatMap((item) => {
+      const state = selectedComboState[item.id];
+      if (!state || !state.checked) return [];
+      const weightOpt = item.weightOptions[state.weightIndex ?? 0] || item.weightOptions[0];
+      return [{
+        ...item,
+        selectedWeight: weightOpt.size,
+        selectedPrice: weightOpt.price,
+      }];
+    });
+  }, [selectedComboState]);
+
+  const comboRunningTotal = useMemo(() => {
+    return checkedComboEntries.reduce((sum, itm) => sum + itm.selectedPrice, 0);
+  }, [checkedComboEntries]);
+
+  // When adding custom combo to cart, save complete item breakup
+  const handleComboContinue = () => {
+    if (checkedComboEntries.length === 0 || !guardOrder()) return;
+    const itemsBreakup = checkedComboEntries.map((itm) => ({
+      name: itm.name,
+      size: itm.selectedWeight,
+      price: itm.selectedPrice,
+    }));
+
+    const newComboBundle = {
+      id: `custom-combo-${Date.now()}`,
+      name: `Custom Palasa Combo Box`,
+      size: `${checkedComboEntries.length} Items Custom Pack`,
+      price: comboRunningTotal,
+      quantity: 1,
+      image: '/assets/pouch.webp',
+      isCustomCombo: true,
+      comboItems: itemsBreakup,
+    };
+
+    ctxAddToCart({
+      ...newComboBundle,
+      productId: 'custom-combo',
+      mrp: comboRunningTotal + 150,
+    });
+    setComboBuilderOpen(false);
+    setSelectedComboState({});
+    showToast(`Added Custom Combo (${checkedComboEntries.length} items) to bag`);
+    openCartDrawer();
+  };
+
+  const handleComboCancel = () => {
+    setSelectedComboState({});
+    setComboBuilderOpen(false);
+  };
+
+  // Category change handler
+  const handleCategorySelect = (catId: string) => {
+    setSelectedCategory(catId);
+    if (catId !== 'cashews') {
+      setSelectedGrade('all');
+    }
+  };
+
+  // Filtered & Sorted Products (strictly no prefilled combos)
+  const filteredProducts = useMemo(() => {
+    return LISTING_PRODUCTS.filter((item) => {
+      // Category filter
+      if (selectedCategory !== 'all') {
+        if (selectedCategory === 'cashews' && item.category !== 'cashews') return false;
+        if (selectedCategory === 'flavours-mixes' && item.category !== 'flavours-mixes')
+          return false;
+        // Combos tab has no prefilled cards; only Build Your Own Combo showcase banner
+        if (selectedCategory === 'combos') return false;
+      }
+
+      // Secondary Cashew Grade filter
+      if (selectedCategory === 'cashews' && selectedGrade !== 'all') {
+        if (item.gradeKey !== selectedGrade) return false;
+      }
+
+      // Search query
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const match =
+          item.name.toLowerCase().includes(q) ||
+          item.desc.toLowerCase().includes(q) ||
+          item.grade.toLowerCase().includes(q);
+        if (!match) return false;
+      }
+
+      // Package Size filter (100g, 200g, 250g, 500g)
+      if (selectedSizeFilter) {
+        const activeGrade = selectedCustomGrades[item.id] || item.customGrades?.[0];
+        const currentOpts = item.hasGradeCustomization && item.gradeOptions && activeGrade
+          ? item.gradeOptions[activeGrade] || item.options
+          : item.options;
+        const hasSize = currentOpts.some((opt) =>
+          opt.size.toLowerCase().includes(selectedSizeFilter.toLowerCase())
+        );
+        if (!hasSize) return false;
+      }
+
+      // Price filter
+      if (selectedPriceFilter) {
+        const activeGrade = selectedCustomGrades[item.id] || item.customGrades?.[0];
+        const currentOpts = item.hasGradeCustomization && item.gradeOptions && activeGrade
+          ? item.gradeOptions[activeGrade] || item.options
+          : item.options;
+        const opt = selectedSizeFilter
+          ? currentOpts.find((o) => o.size.toLowerCase().includes(selectedSizeFilter.toLowerCase())) || currentOpts[0]
+          : currentOpts[0];
+        const basePrice = opt.price;
+        if (selectedPriceFilter === 'under500' && basePrice >= 500) return false;
+        if (
+          selectedPriceFilter === '500to1000' &&
+          (basePrice < 500 || basePrice > 1000)
+        )
+          return false;
+        if (selectedPriceFilter === 'above1000' && basePrice <= 1000) return false;
+      }
+
+      return true;
+    }).sort((a, b) => {
+      const getPrice = (item: Product) => {
+        const activeGrade = selectedCustomGrades[item.id] || item.customGrades?.[0];
+        const opts = item.hasGradeCustomization && item.gradeOptions && activeGrade
+          ? item.gradeOptions[activeGrade] || item.options
+          : item.options;
+        if (selectedSizeFilter) {
+          const matchOpt = opts.find((o) =>
+            o.size.toLowerCase().includes(selectedSizeFilter.toLowerCase())
+          );
+          if (matchOpt) return matchOpt.price;
+        }
+        return opts[0]?.price ?? 0;
+      };
+
+      if (sortBy === 'price-low') {
+        return getPrice(a) - getPrice(b);
+      }
+      if (sortBy === 'price-high') {
+        return getPrice(b) - getPrice(a);
+      }
+      return 0; // default featured order
+    });
+  }, [
+    selectedCategory,
+    selectedGrade,
+    searchQuery,
+    selectedSizeFilter,
+    selectedPriceFilter,
+    sortBy,
+    selectedCustomGrades,
+  ]);
+
+  const isFilterActive =
+    Boolean(selectedSizeFilter) ||
+    Boolean(selectedPriceFilter) ||
+    Boolean(searchQuery.trim()) ||
+    (selectedCategory === 'cashews' && selectedGrade !== 'all');
+
+  const resetFilters = () => {
+    setSelectedSizeFilter('');
+    setSelectedPriceFilter('');
+    setSearchQuery('');
+    setSelectedGrade('all');
+  };
+
+  const sendWhatsAppDirectOrder = () => {
+    if (!directOrderItem) return;
+    let text = `*Direct Buy Order | The Original Palasa Cashews*\n\n`;
+    text += `*Product:* ${directOrderItem.name}\n`;
+    text += `*Size:* ${directOrderItem.chosenSize}\n`;
+    text += `*Price:* ₹${directOrderItem.chosenPrice}\n`;
+    text += `*Quantity:* ${directOrderItem.quantity}\n`;
+    text += `*Total:* ₹${directOrderItem.chosenPrice * directOrderItem.quantity}\n\n`;
+    if (orderForm.name) text += `*Customer:* ${orderForm.name}\n`;
+    if (orderForm.phone) text += `*Phone:* ${orderForm.phone}\n`;
+    if (orderForm.address) text += `*Address:* ${orderForm.address}, ${orderForm.pincode}\n`;
+    text += `\nPlease confirm dispatch details.`;
+
+    const url = `https://wa.me/919100267404?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+    setOrderModalOpen(false);
+  };
+
+  return (
+    <main className="shop-page">
+      <Nav />
+
+      {/* Hero Header - Minimal & Tightened */}
+      <section className="shop-hero">
+        <div className="shop-hero-inner">
+          <span className="section-tag">Palasa harvest catalog · Direct factory roast</span>
+          <h1 className="shop-hero-title">The Harvest Catalog</h1>
+          <p className="shop-hero-lead">
+            Slow-roasted whole calibers, skin-on heritage nuts, and artisanal confections sealed fresh at source in Palasa.
+          </p>
+        </div>
+
+        {/* Streamlined Category Navigation */}
+        <div className="shop-category-nav-wrapper">
+          <nav className="shop-category-nav" aria-label="Product Categories">
+            {TOP_CATEGORIES.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                className={`shop-category-tab ${
+                  selectedCategory === cat.id ? 'active' : ''
+                }`}
+                onClick={() => handleCategorySelect(cat.id)}
+              >
+                <span className="tab-desktop-label">{cat.label}</span>
+                <span className="tab-mobile-label">
+                  <span className="tab-mobile-title">{cat.shortLabel}</span>
+                  {cat.hint && <span className="tab-mobile-hint">{cat.hint}</span>}
+                </span>
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        {/* Secondary Grade Selector for Cashews */}
+        {selectedCategory === 'cashews' && (
+          <div className="shop-secondary-grades-wrap">
+            <div className="shop-secondary-grades" aria-label="Cashew Grades">
+              {CASHEW_GRADES.map((grade) => (
+                <button
+                  key={grade.id}
+                  type="button"
+                  className={`shop-grade-chip ${
+                    selectedGrade === grade.id ? 'active' : ''
+                  }`}
+                  onClick={() => setSelectedGrade(grade.id)}
+                >
+                  {grade.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Main Catalog Area: Simplified Sidebar + Boutique Grid */}
+      <section className="shop-catalog-section">
+        <div className="shop-catalog-inner">
+          {/* Mobile Filter Toggle */}
+          <div className="mobile-filter-bar">
+            <button
+              type="button"
+              className="btn-filter-toggle"
+              onClick={() => setMobileFilterOpen((o) => !o)}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+              </svg>
+              <span>Filters &amp; Sort</span>
+              {isFilterActive && <span className="filter-badge-dot"></span>}
+            </button>
+            <span className="product-count-label">
+              {selectedCategory === 'combos' ? '1 custom builder' : `${filteredProducts.length} items`}
+            </span>
+          </div>
+
+          <div className="shop-layout">
+            {/* Simplified Sidebar Filter Panel */}
+            <aside className={`shop-sidebar ${mobileFilterOpen ? 'mobile-open' : ''}`}>
+              <div className="sidebar-header">
+                <h3 className="sidebar-title">Refine Harvest</h3>
+                <button
+                  type="button"
+                  className="sidebar-close-btn"
+                  onClick={() => setMobileFilterOpen(false)}
+                  aria-label="Close filters"
+                >
+                  &times;
+                </button>
+              </div>
+
+              {/* Search */}
+              <div className="filter-group">
+                <label className="filter-group-label" htmlFor="shop-search">
+                  Search
+                </label>
+                <input
+                  id="shop-search"
+                  type="text"
+                  placeholder="e.g. W180, Skin, Chocolate..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="filter-search-input"
+                />
+              </div>
+
+              {/* Packaging Size Filter: Clicking a pill filters AND selects that size on all cards */}
+              <div className="filter-group">
+                <div className="filter-label-row">
+                  <h4 className="filter-group-label">Packaging Size</h4>
+                  {selectedSizeFilter && (
+                    <button
+                      type="button"
+                      className="filter-clear-sub"
+                      onClick={() => setSelectedSizeFilter('')}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="filter-pills-row">
+                  {[
+                    { id: '100', label: '100g' },
+                    { id: '200', label: '200g' },
+                    { id: '250', label: '250g' },
+                    { id: '500', label: '500g' },
+                  ].map((size) => (
+                    <button
+                      key={size.id}
+                      type="button"
+                      className={`filter-pill ${
+                        selectedSizeFilter === size.id ? 'active' : ''
+                      }`}
+                      onClick={() => handleSizeFilterClick(size.id)}
+                    >
+                      {size.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Price Filter */}
+              <div className="filter-group">
+                <div className="filter-label-row">
+                  <h4 className="filter-group-label">Price Range</h4>
+                  {selectedPriceFilter && (
+                    <button
+                      type="button"
+                      className="filter-clear-sub"
+                      onClick={() => setSelectedPriceFilter('')}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="filter-options-list">
+                  {[
+                    { id: 'under500', label: 'Under ₹500' },
+                    { id: '500to1000', label: '₹500 to ₹1,000' },
+                    { id: 'above1000', label: 'Above ₹1,000' },
+                  ].map((pr) => (
+                    <button
+                      key={pr.id}
+                      type="button"
+                      className={`filter-option-btn ${
+                        selectedPriceFilter === pr.id ? 'active' : ''
+                      }`}
+                      onClick={() =>
+                        setSelectedPriceFilter(selectedPriceFilter === pr.id ? '' : pr.id)
+                      }
+                    >
+                      <span>{pr.label}</span>
+                      {selectedPriceFilter === pr.id && (
+                        <span className="filter-active-tick">✓</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Reset Filters */}
+              {isFilterActive && (
+                <button
+                  type="button"
+                  className="filter-reset-btn"
+                  onClick={resetFilters}
+                >
+                  Clear all active filters
+                </button>
+              )}
+            </aside>
+
+            {/* Product Grid Main Area */}
+            <div className="shop-main">
+              {/* Top Controls Bar */}
+              <div className="shop-top-bar">
+                <span className="shop-results-count">
+                  {selectedCategory === 'combos'
+                    ? 'Bespoke Combo Builder'
+                    : `Showing ${filteredProducts.length} harvests`}
+                </span>
+
+                {selectedCategory !== 'combos' && (
+                  <div className="shop-sort-wrap">
+                    <label htmlFor="shop-sort" className="sort-label">
+                      Sort by:
+                    </label>
+                    <select
+                      id="shop-sort"
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value)}
+                      className="shop-sort-select"
+                    >
+                      <option value="featured">Featured Curations</option>
+                      <option value="price-low">Price: Low to High</option>
+                      <option value="price-high">Price: High to Low</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {/* COMBOS TAB: ELEGANT WIDE SHOWCASE BANNER (No awkward narrow card) */}
+              {selectedCategory === 'combos' && (
+                <div className="combo-showcase-banner">
+                  <div className="combo-banner-left">
+                    <div className="combo-banner-badge-row">
+                      <span className="shop-card-badge combo-badge">Custom Combo</span>
+                      <span className="combo-banner-hint">You can build your own combo</span>
+                    </div>
+                    <h3 className="combo-banner-title">Build Your Bespoke Harvest Combo</h3>
+                    <p className="combo-banner-desc">
+                      Handpick any combination of slow-roasted whole cashews (250g / 500g) and artisanal dark chocolates (100g / 200g). Packaged factory-fresh in Palasa with live running totals.
+                    </p>
+                    <div className="combo-builder-perks horizontal">
+                      <span className="combo-perk-tag">✓ Choose weights per nut</span>
+                      <span className="combo-perk-tag">✓ Real-time live total calculation</span>
+                      <span className="combo-perk-tag">✓ Fresh Palasa gift packing</span>
+                    </div>
+                  </div>
+                  <div className="combo-banner-right">
+                    <button
+                      type="button"
+                      className="btn-buy-now btn-open-builder-banner"
+                      onClick={() => setComboBuilderOpen(true)}
+                    >
+                      <span>Start Building Your Box</span>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                        <polyline points="12 5 19 12 12 19"></polyline>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Standard Catalog Grid (Notice: Custom Combo is removed from 'All' grid) */}
+              {selectedCategory !== 'combos' && (
+                <div className="shop-products-grid">
+                  {filteredProducts.map((product) => {
+                    const optData = getProductOption(product);
+                    const activeOpt = optData;
+                    const activeGrade = optData.selectedGrade;
+
+                    const currentOptions = activeGrade
+                      ? product.gradeOptions?.[activeGrade] || product.options
+                      : product.options;
+
+                    // If a packaging size filter is active (e.g. 250g), show ONLY that size on the card.
+                    // If no filter is active, show both/all available sizes.
+                    const matchingOptions = selectedSizeFilter
+                      ? currentOptions.filter((opt) =>
+                          opt.size.toLowerCase().includes(selectedSizeFilter.toLowerCase())
+                        )
+                      : currentOptions;
+                    const displayedOptions = matchingOptions.length > 0 ? matchingOptions : currentOptions;
+
+                    return (
+                      <article key={product.id} className="shop-product-card">
+                        {/* Image Showcase (Links to PDP) */}
+                        <Link
+                          to={`/products/${product.id}`}
+                          className="shop-card-media-link"
+                          aria-label={`View details for ${product.name}`}
+                        >
+                          <div className="shop-card-media">
+                            <img
+                              src={product.image}
+                              alt={product.name}
+                              width={1178}
+                              height={1280}
+                              loading="lazy"
+                              className="shop-card-img"
+                            />
+                            {product.badge && (
+                              <span className="shop-card-badge">{product.badge}</span>
+                            )}
+                          </div>
+                        </Link>
+
+
+                        {/* Card Content */}
+                        <div className="shop-card-body">
+                          <span className="shop-card-grade">{product.grade}</span>
+                          <h3 className="shop-card-title">
+                            <Link to={`/products/${product.id}`} className="shop-title-link">
+                              {product.name}
+                            </Link>
+                          </h3>
+                          <p className="shop-card-desc">{product.desc}</p>
+
+                          {/* Grade Customization Selector (for Chocolate Cashew & Dry Fruits Mix) */}
+                          {product.hasGradeCustomization && product.customGrades ? (
+                            <div className="shop-grade-custom-selector">
+                              <span className="grade-custom-label">Cashew Grade:</span>
+                              <div className="grade-custom-pills">
+                                {product.customGrades.map((gKey) => (
+                                  <button
+                                    key={gKey}
+                                    type="button"
+                                    className={`grade-custom-pill ${
+                                      activeGrade === gKey ? 'active' : ''
+                                    }`}
+                                    onClick={() => handleCustomGradeChange(product.id, gKey)}
+                                  >
+                                    {gKey}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            /* Spacer to ensure perfect vertical baseline alignment across all cards */
+                            <div className="shop-grade-custom-spacer" aria-hidden="true" />
+                          )}
+
+                          {/* Size Selection Pills: Shows only filtered size if filter is active; shows all sizes if no filter */}
+                          <div className="shop-size-selector">
+                            <span className="size-selector-label">Select Weight:</span>
+                            <div className="size-pills">
+                              {displayedOptions.map((opt) => {
+                                const originalIdx = currentOptions.findIndex((o) => o.size === opt.size);
+                                const isSelected = activeOpt.size === opt.size;
+                                return (
+                                  <button
+                                    key={opt.size}
+                                    type="button"
+                                    className={`size-pill ${isSelected ? 'active' : ''}`}
+                                    onClick={() => handleSizeChange(product.id, originalIdx >= 0 ? originalIdx : 0)}
+                                  >
+                                    {opt.size}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Price Display */}
+                          <div className="shop-card-price-row">
+                            <div className="price-stack">
+                              <span className="current-price">₹{activeOpt.price}</span>
+                              {activeOpt.mrp && (
+                                <span className="mrp-price">₹{activeOpt.mrp}</span>
+                              )}
+                            </div>
+                            <span className="tax-inclusive-tag">Tax incl.</span>
+                          </div>
+
+                          <div className="product-coins-perk shop-card-coins-perk">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"></path>
+                              <path d="M16 3H4a2 2 0 0 0-2 2v2"></path>
+                              <circle cx="16" cy="14" r="1.5" fill="currentColor"></circle>
+                            </svg>
+                            <span className="coins-perk-text">Earn <strong>83 Original Coins</strong> (100 coins = ₹10)</span>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="shop-card-actions">
+                            <button
+                              type="button"
+                              className="btn-add-to-cart"
+                              onClick={() => addToCart(product)}
+                              aria-label={`Add ${product.name} to cart`}
+                            >
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <circle cx="9" cy="21" r="1"></circle>
+                                <circle cx="20" cy="21" r="1"></circle>
+                                <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path>
+                              </svg>
+                              <span>Add to cart</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              className="btn-buy-now"
+                              onClick={() => handleBuyNow(product)}
+                            >
+                              Buy now
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Empty state if nothing matches */}
+              {selectedCategory !== 'combos' && filteredProducts.length === 0 && (
+                <div className="shop-empty-state">
+                  <h3 className="empty-title">No harvests found</h3>
+                  <p className="empty-text">
+                    Try clearing your search or switching to another category.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-buy-now"
+                    onClick={resetFilters}
+                  >
+                    Reset all filters
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* =========================================================================
+          BUILD YOUR OWN COMBO SELECTOR (WITH WEIGHT FILTER PER ITEM)
+          Cashews: 250g & 500g
+          Chocolates: 100g & 200g
+          Dry Fruits Mix: 100g each & 200g each
+          ========================================================================= */}
+      {comboBuilderOpen && (
+        <div
+          className="combo-modal-overlay"
+          onClick={handleComboCancel}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="combo-modal-container"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="combo-modal-header">
+              <div>
+                <span className="combo-modal-subtitle">Custom Curation</span>
+                <h3 className="combo-modal-title">Build Your Own Combo</h3>
+              </div>
+              <button
+                type="button"
+                className="combo-modal-close-btn"
+                onClick={handleComboCancel}
+                aria-label="Close Combo Builder"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Modal Content Body */}
+            <div className="combo-modal-body">
+              {/* DESKTOP ITEM GRID VIEW */}
+              <div className="combo-desktop-grid">
+                <div className="combo-items-grid">
+                  {COMBO_BUILDER_ITEMS.map((item) => {
+                    const itemState = selectedComboState[item.id];
+                    const isChecked = Boolean(itemState?.checked);
+                    const currentWeightIdx = itemState?.weightIndex ?? 0;
+                    const activeWeight = item.weightOptions[currentWeightIdx] || item.weightOptions[0];
+
+                    return (
+                      <div
+                        key={item.id}
+                        className={`combo-grid-card ${isChecked ? 'selected' : ''}`}
+                      >
+                        <div
+                          className="combo-grid-card-check"
+                          onClick={() => toggleComboItem(item.id)}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            aria-label={`Select ${item.name}`}
+                          />
+                        </div>
+                        <img
+                          src={item.image}
+                          alt={item.name}
+                          className="combo-grid-card-img"
+                          onClick={() => toggleComboItem(item.id)}
+                        />
+                        <div className="combo-grid-card-content">
+                          <div className="combo-grid-card-top" onClick={() => toggleComboItem(item.id)}>
+                            <span className="combo-grid-card-tag">{item.tag}</span>
+                            <h4 className="combo-grid-card-name">{item.name}</h4>
+                          </div>
+
+                          {/* Weight Filter Selector on Desktop Card */}
+                          <div className="combo-item-weight-row">
+                            <span className="combo-weight-label">Weight:</span>
+                            <div className="combo-weight-pills">
+                              {item.weightOptions.map((wOpt, wIdx) => (
+                                <button
+                                  key={wOpt.size}
+                                  type="button"
+                                  className={`combo-weight-pill ${
+                                    currentWeightIdx === wIdx && isChecked ? 'active' : ''
+                                  }`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setComboItemWeight(item.id, wIdx);
+                                  }}
+                                >
+                                  {wOpt.size}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="combo-grid-card-price" onClick={() => toggleComboItem(item.id)}>
+                            ₹{activeWeight.price}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* DESKTOP STICKY SIDEBAR / RUNNING SUMMARY */}
+                <aside className="combo-desktop-sidebar">
+                  <div className="combo-summary-box">
+                    <h4 className="combo-summary-title">Your Custom Box</h4>
+                    <p className="combo-summary-desc">
+                      Select cashews (250g/500g) and confections (100g/200g). Packaged factory-fresh in Palasa.
+                    </p>
+
+                    <div className="combo-selected-list">
+                      {checkedComboEntries.length === 0 ? (
+                        <div className="combo-selected-empty">
+                          No items checked yet. Select any item on the left and choose your preferred weight.
+                        </div>
+                      ) : (
+                        checkedComboEntries.map((itm) => (
+                          <div key={itm.id} className="combo-selected-row">
+                            <div className="combo-selected-left">
+                              <span className="combo-selected-name">{itm.name}</span>
+                              <span className="combo-selected-weight-tag">{itm.selectedWeight}</span>
+                            </div>
+                            <span className="combo-selected-price">₹{itm.selectedPrice}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <div className="combo-total-divider"></div>
+
+                    <div className="combo-summary-total-row">
+                      <span>Live Running Total:</span>
+                      <strong className="combo-summary-total-amt">
+                        ₹{comboRunningTotal}
+                      </strong>
+                    </div>
+                    <span className="combo-summary-count">
+                      {checkedComboEntries.length} {checkedComboEntries.length === 1 ? 'item' : 'items'} in combo
+                    </span>
+
+                    <div className="combo-desktop-actions">
+                      <button
+                        type="button"
+                        className="btn-buy-now btn-combo-continue"
+                        disabled={checkedComboEntries.length === 0}
+                        onClick={handleComboContinue}
+                      >
+                        Add Custom Combo to Bag (₹{comboRunningTotal})
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-combo-cancel"
+                        onClick={handleComboCancel}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </aside>
+              </div>
+
+              {/* MOBILE SINGLE-COLUMN LIST VIEW WITH WEIGHT SELECTOR PER ROW */}
+              <div className="combo-mobile-list-view">
+                <p className="combo-mobile-instruction">
+                  Check items and select packaging weight to build your bespoke box:
+                </p>
+                <div className="combo-mobile-rows">
+                  {COMBO_BUILDER_ITEMS.map((item) => {
+                    const itemState = selectedComboState[item.id];
+                    const isChecked = Boolean(itemState?.checked);
+                    const currentWeightIdx = itemState?.weightIndex ?? 0;
+                    const activeWeight = item.weightOptions[currentWeightIdx] || item.weightOptions[0];
+
+                    return (
+                      <div
+                        key={item.id}
+                        className={`combo-mobile-row ${isChecked ? 'selected' : ''}`}
+                      >
+                        <div
+                          className="combo-mobile-row-left"
+                          onClick={() => toggleComboItem(item.id)}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            className="combo-mobile-checkbox"
+                          />
+                          <div className="combo-mobile-row-info">
+                            <span className="combo-mobile-row-name">{item.name}</span>
+                            <span className="combo-mobile-row-meta">{item.tag}</span>
+                          </div>
+                        </div>
+
+                        {/* Weight Switcher Pills in Mobile Row */}
+                        <div className="combo-mobile-weight-controls">
+                          <div className="combo-weight-pills">
+                            {item.weightOptions.map((wOpt, wIdx) => (
+                              <button
+                                key={wOpt.size}
+                                type="button"
+                                className={`combo-weight-pill ${
+                                  currentWeightIdx === wIdx && isChecked ? 'active' : ''
+                                }`}
+                                onClick={() => setComboItemWeight(item.id, wIdx)}
+                              >
+                                {wOpt.size}
+                              </button>
+                            ))}
+                          </div>
+                          <span className="combo-mobile-row-price">₹{activeWeight.price}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* MOBILE STICKY BOTTOM BAR (Total + Continue + Cancel) */}
+            <div className="combo-mobile-sticky-bar">
+              <div className="combo-mobile-sticky-left">
+                <span className="combo-mobile-sticky-count">
+                  {checkedComboEntries.length} {checkedComboEntries.length === 1 ? 'item' : 'items'}
+                </span>
+                <span className="combo-mobile-sticky-total">₹{comboRunningTotal}</span>
+              </div>
+              <div className="combo-mobile-sticky-actions">
+                <button
+                  type="button"
+                  className="btn-combo-mobile-cancel"
+                  onClick={handleComboCancel}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-combo-mobile-continue"
+                  disabled={checkedComboEntries.length === 0}
+                  onClick={handleComboContinue}
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Cart Button (only appears when items exist in global cart) */}
+      {cartCount > 0 && (
+        <button
+          type="button"
+          className="floating-cart-btn"
+          onClick={openCartDrawer}
+          aria-label="View Cart"
+        >
+          <div className="cart-badge-count">{cartCount}</div>
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="9" cy="21" r="1"></circle>
+            <circle cx="20" cy="21" r="1"></circle>
+            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path>
+          </svg>
+          <span>₹{cartTotal.toLocaleString('en-IN')}</span>
+        </button>
+      )}
+
+      {/* Buy Now / Quick Checkout Modal */}
+      {orderModalOpen && directOrderItem && (
+        <div
+          className="order-modal-overlay"
+          onClick={() => setOrderModalOpen(false)}
+        >
+          <div className="order-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="order-modal-header">
+              <h3 className="order-modal-title">Direct Harvest Order</h3>
+              <button
+                type="button"
+                className="sidebar-close-btn"
+                onClick={() => setOrderModalOpen(false)}
+                aria-label="Close Order Modal"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="order-modal-summary">
+              <img
+                src={directOrderItem.image}
+                alt={directOrderItem.name}
+                className="order-summary-img"
+              />
+              <div>
+                <h4 className="order-summary-name">{directOrderItem.name}</h4>
+                <div className="order-summary-detail">
+                  Size: <strong>{directOrderItem.chosenSize}</strong> · Price:{' '}
+                  <strong>₹{directOrderItem.chosenPrice}</strong>
+                </div>
+                <div className="order-summary-origin">
+                  Direct Palasa dispatch · Fresh batch
+                </div>
+              </div>
+            </div>
+
+            <form
+              className="order-modal-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                sendWhatsAppDirectOrder();
+              }}
+            >
+              <div className="form-group">
+                <label>Your Full Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Anand Kumar"
+                  value={orderForm.name}
+                  onChange={(e) =>
+                    setOrderForm({ ...orderForm, name: e.target.value })
+                  }
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Mobile Number (WhatsApp preferred)</label>
+                <input
+                  type="tel"
+                  placeholder="e.g. 9876543210"
+                  value={orderForm.phone}
+                  onChange={(e) =>
+                    setOrderForm({ ...orderForm, phone: e.target.value })
+                  }
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Delivery Address &amp; City</label>
+                <input
+                  type="text"
+                  placeholder="Street, locality, city"
+                  value={orderForm.address}
+                  onChange={(e) =>
+                    setOrderForm({ ...orderForm, address: e.target.value })
+                  }
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Pincode</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 500081"
+                  value={orderForm.pincode}
+                  onChange={(e) =>
+                    setOrderForm({ ...orderForm, pincode: e.target.value })
+                  }
+                  required
+                />
+              </div>
+
+              <div className="order-modal-actions">
+                <button type="submit" className="btn-buy-now modal-submit">
+                  Confirm &amp; Order on WhatsApp
+                </button>
+                <p className="order-form-disclaimer">
+                  You will connect directly with founder CH Dhana Vardhan / The Original dispatch desk.
+                </p>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="shop-toast" role="status">
+          <span className="toast-check">✓</span>
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      <Footer />
+    </main>
+  );
+}

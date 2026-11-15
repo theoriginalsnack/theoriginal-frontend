@@ -53,8 +53,10 @@ We are proud **selective relabellers and curators** rather than a single-factory
 
 ## 💻 Tech Stack & Architecture
 
-- **Framework**: [Next.js](https://nextjs.org/) (App Router, Turbopack)
-- **Styling**: Pure Vanilla CSS (`app/globals.css`) with curated design tokens (`--navy-deep`, `--gold-soft`, `--paper`, `--cream`)
+- **Framework**: [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/), built with [Vite](https://vite.dev/)
+- **Routing**: [React Router](https://reactrouter.com/) (client-side, per-page code splitting)
+- **Linting**: ESLint (typescript-eslint, React Hooks, React Refresh)
+- **Styling**: Pure Vanilla CSS (`src/index.css`) with curated design tokens (`--navy-deep`, `--gold-soft`, `--paper`, `--cream`)
 - **Typography**: Single clean typeface family [Outfit](https://fonts.google.com/specimen/Outfit) via Google Fonts
 - **Features**:
   - **Full-Screen Hero Video** with layered typography and direct actions.
@@ -79,7 +81,19 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:5173](http://localhost:5173) in your browser.
+
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Vite dev server with HMR |
+| `npm run build` | Type-check (`tsc -b`) and build to `dist/` |
+| `npm run preview` | Serve the production build locally |
+| `npm run lint` | ESLint |
+| `npm run typecheck` | TypeScript only |
+
+> **Taking orders:** orders are paused by default. While paused, the home page shows a "not accepting orders" banner and every Add to cart / Buy now / Place order shows a "back soon" toast. Set `VITE_ORDERS_OPEN=true` (see `.env.example`, or your host's environment variables) and rebuild to reopen.
+
+> **Deploying:** this is a single-page app. Configure your host to serve `index.html` for unknown paths (SPA fallback) so deep links like `/products/w180` work on refresh.
 
 ---
 
